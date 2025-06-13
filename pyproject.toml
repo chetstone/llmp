@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llmp"
+version = "0.1.0"
+description = "LLM prompt tool with clipboard and GitHub integration"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pyperclip",
+    "PyGithub",
+    "click>=8.0",  # for better CLI handling
+]
+
+[project.scripts]
+llmp = "llmp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llmp"]
