@@ -253,19 +253,60 @@ class LLMPrompt:
             print(f"Warning: Failed to copy to clipboard: {e}", file=sys.stderr)
             return False
 
+    def _parse_github_spec(self, spec: str) -> Tuple[str, str, Optional[int]]:
+        """
+        Parse GitHub specification.
+
+        Formats:
+        - owner/repo#123 -> (owner, repo, 123)
+        - repo#123 -> (chetstone, repo, 123)
+        - owner/repo -> (owner, repo, None)
+        - repo -> (chetstone, repo, None)
+
+        Returns: (owner, repo, issue_number)
+        """
+        # Split by # if present
+        if '#' in spec:
+            repo_part, issue_str = spec.split('#', 1)
+            try:
+                issue_number = int(issue_str)
+            except ValueError:
+                raise ValueError(f"Invalid issue number: {issue_str}")
+        else:
+            repo_part = spec
+            issue_number = None
+
+        # Split owner/repo
+        if '/' in repo_part:
+            owner, repo = repo_part.split('/', 1)
+        else:
+            owner = "chetstone"
+            repo = repo_part
+
+        return owner, repo, issue_number
+
+    def _truncate_for_title(self, text: str, max_length: int = 80) -> str:
+        """Truncate text for use as issue title."""
+        # Take first line only
+        first_line = text.split('\n')[0].strip()
+
+        if len(first_line) <= max_length:
+            return first_line
+
+        # Truncate and add ellipsis
+        return first_line[:max_length-3] + "..."
+
     def _post_to_github(self, prompt: str, response: str, model: str, cid: Optional[str],
                         issue_spec: str) -> bool:
-        """Post formatted output as a GitHub issue comment."""
+        """Post formatted output as a GitHub issue comment or create new issue."""
         if not HAS_GITHUB:
             print("Error: PyGithub not installed. Install with: pip install PyGithub", file=sys.stderr)
             return False
 
         try:
-            repo_part, issue_number = issue_spec.split('#')
-            owner, repo_name = repo_part.split('/')
-            issue_number = int(issue_number)
-        except ValueError:
-            print(f"Error: Invalid issue format '{issue_spec}'. Use: owner/repo#number", file=sys.stderr)
+            owner, repo_name, issue_number = self._parse_github_spec(issue_spec)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
             return False
 
         token = os.environ.get('GITHUB_TOKEN')
@@ -276,10 +317,9 @@ class LLMPrompt:
         try:
             g = Github(token)
             repo = g.get_repo(f"{owner}/{repo_name}")
-            issue = repo.get_issue(issue_number)
 
             cid_line = f"\n#### Conversation: {cid}" if cid else ""
-            comment_body = f"""## Prompt:
+            body = f"""## Prompt:
 {prompt}
 
 #### Model: {model}{cid_line}
@@ -287,8 +327,17 @@ class LLMPrompt:
 ## Response:
 {response}"""
 
-            issue.create_comment(comment_body)
-            print(f"Posted to GitHub issue: {issue_spec}")
+            if issue_number:
+                # Add comment to existing issue
+                issue = repo.get_issue(issue_number)
+                issue.create_comment(body)
+                print(f"Posted to GitHub issue: {owner}/{repo_name}#{issue_number}")
+            else:
+                # Create new issue
+                title = self._truncate_for_title(prompt)
+                issue = repo.create_issue(title=title, body=body)
+                print(f"Created GitHub issue: {owner}/{repo_name}#{issue.number}")
+
             return True
 
         except Exception as e:
@@ -349,7 +398,7 @@ class LLMPrompt:
 @click.option('-m', '--model', help='Specify model to use')
 @click.option('-c', '--continue', 'continue_conv', is_flag=True, help='Continue previous conversation')
 @click.option('--cid', help='Continue specific conversation by ID')
-@click.option('--github-issue', help='Post to GitHub issue (format: owner/repo#number)')
+@click.option('-g', '--github-issue', help='Post to GitHub (repo, repo#num, owner/repo, owner/repo#num)')
 @click.pass_context
 def main(ctx, clipboard, model, continue_conv, cid, github_issue):
     """LLM prompt tool with clipboard and GitHub integration."""

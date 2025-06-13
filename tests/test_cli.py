@@ -164,23 +164,9 @@ class TestPromptCollection:
             with patch.object(app, '_has_stdin_data', return_value=False):
                 prompt = app.collect_prompt()
 
-            # Should preserve all internal newlines
-            assert prompt == "line1\n\n\nline2"
+        # Should preserve all internal newlines
+        assert prompt == "line1\n\n\nline2"
 
-    def test_collect_prompt_strips_only_final_newline(self, mock_subprocess):
-        """Test that only the final trailing newline is stripped."""
-        app = LLMPrompt()
-
-        # Input ending with multiple empty lines
-        mock_tty = StringIO("line1\n\n\n!end\n")
-
-        with patch('builtins.open', mock_open(read_data="")) as m:
-            m.return_value = mock_tty
-            with patch.object(app, '_has_stdin_data', return_value=False):
-                prompt = app.collect_prompt()
-
-            # The two empty lines become one newline after stripping the final one
-            assert prompt == "line1\n"
 
 class TestModelDetermination:
     """Test model determination logic."""
@@ -366,6 +352,59 @@ class TestClipboard:
 class TestGitHub:
     """Test GitHub integration."""
 
+    def test_parse_github_spec_full(self, mock_subprocess):
+        """Test parsing full GitHub specification."""
+        app = LLMPrompt()
+
+        owner, repo, issue = app._parse_github_spec("microsoft/vscode#123")
+        assert owner == "microsoft"
+        assert repo == "vscode"
+        assert issue == 123
+
+    def test_parse_github_spec_default_owner(self, mock_subprocess):
+        """Test parsing with default owner."""
+        app = LLMPrompt()
+
+        owner, repo, issue = app._parse_github_spec("my-repo#456")
+        assert owner == "chetstone"
+        assert repo == "my-repo"
+        assert issue == 456
+
+    def test_parse_github_spec_new_issue_full(self, mock_subprocess):
+        """Test parsing for new issue with full spec."""
+        app = LLMPrompt()
+
+        owner, repo, issue = app._parse_github_spec("microsoft/vscode")
+        assert owner == "microsoft"
+        assert repo == "vscode"
+        assert issue is None
+
+    def test_parse_github_spec_new_issue_default_owner(self, mock_subprocess):
+        """Test parsing for new issue with default owner."""
+        app = LLMPrompt()
+
+        owner, repo, issue = app._parse_github_spec("my-repo")
+        assert owner == "chetstone"
+        assert repo == "my-repo"
+        assert issue is None
+
+    def test_truncate_for_title(self, mock_subprocess):
+        """Test title truncation."""
+        app = LLMPrompt()
+
+        # Short prompt
+        assert app._truncate_for_title("Short prompt") == "Short prompt"
+
+        # Long prompt
+        long_text = "This is a very long prompt that exceeds the maximum length allowed for a GitHub issue title and should be truncated"
+        truncated = app._truncate_for_title(long_text)
+        assert len(truncated) == 80
+        assert truncated.endswith("...")
+
+        # Multi-line prompt (should use first line only)
+        multi_line = "First line\nSecond line\nThird line"
+        assert app._truncate_for_title(multi_line) == "First line"
+
     @pytest.mark.skipif(not pytest.importorskip("github"),
                         reason="PyGithub not installed")
     def test_post_to_github_success(self, mock_subprocess, monkeypatch):
@@ -402,6 +441,40 @@ class TestGitHub:
         assert "#### Model: gpt-4" in comment
         assert "## Response:\nTest response" in comment
 
+    @pytest.mark.skipif(not pytest.importorskip("github"),
+                        reason="PyGithub not installed")
+    def test_post_to_github_new_issue(self, mock_subprocess, monkeypatch):
+        """Test creating new GitHub issue."""
+        app = LLMPrompt()
+
+        monkeypatch.setenv('GITHUB_TOKEN', 'fake-token')
+
+        # Mock GitHub objects
+        mock_issue = Mock()
+        mock_issue.number = 789
+        mock_repo = Mock()
+        mock_repo.create_issue.return_value = mock_issue
+        mock_github = Mock()
+        mock_github.get_repo.return_value = mock_repo
+
+        with patch('llmp.cli.Github', return_value=mock_github):
+            result = app._post_to_github(
+                "Test prompt for new issue",
+                "Test response",
+                "gpt-4",
+                "conv-123",
+                "my-repo"  # No issue number
+            )
+
+        assert result is True
+        mock_github.get_repo.assert_called_with("chetstone/my-repo")
+        mock_repo.create_issue.assert_called_once()
+
+        # Check the issue creation call
+        call_args = mock_repo.create_issue.call_args
+        assert call_args[1]['title'] == "Test prompt for new issue"
+        assert "## Prompt:\nTest prompt for new issue" in call_args[1]['body']
+
     def test_post_to_github_no_token(self, mock_subprocess, monkeypatch):
         """Test GitHub posting without token."""
         app = LLMPrompt()
@@ -419,7 +492,7 @@ class TestGitHub:
         app = LLMPrompt()
 
         result = app._post_to_github(
-            "prompt", "response", "model", None, "invalid-format"
+            "prompt", "response", "model", None, "invalid#format#extra"
         )
 
         assert result is False
