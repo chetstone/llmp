@@ -25,48 +25,59 @@ except ImportError:
     HAS_GITHUB = False
 
 
-# First, we need to find and import the llm module from the uv tool installation
-def find_llm_module():
-    """Find and import the llm module from uv tools."""
-    # Try to find llm installation via uv
-    try:
-        result = subprocess.run(
-            ["uv", "tool", "dir"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        tool_dir = Path(result.stdout.strip())
-        llm_dir = tool_dir / "llm"
-
-        if llm_dir.exists():
-            # Find the site-packages directory
-            for path in llm_dir.rglob("site-packages"):
-                if path.is_dir():
-                    sys.path.insert(0, str(path))
-                    try:
-                        import llm
-                        return llm
-                    except ImportError:
-                        continue
-
-        # Fallback: try to import directly (might work if in same env)
-        import llm
-        return llm
-
-    except Exception as e:
-        print(f"Error: Could not find llm module: {e}", file=sys.stderr)
-        print("Make sure llm is installed with: uv tool install llm", file=sys.stderr)
-        sys.exit(1)
-
-
-# Import llm from the uv tool installation
-llm = find_llm_module()
-
-
 class LLMPrompt:
     def __init__(self):
-        self.db = llm.get_default_db()
+        # Verify llm command exists
+        try:
+            subprocess.run(['llm', '--version'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Error: 'llm' command not found. Please install with: uv tool install llm",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    def _run_llm_command(self, args: List[str], input_text: Optional[str] = None) -> Tuple[str, int]:
+        """Run llm command and return (output, exit_code)."""
+        try:
+            result = subprocess.run(
+                ['llm'] + args,
+                input=input_text,
+                text=True,
+                capture_output=True
+            )
+            return result.stdout, result.returncode
+        except Exception as e:
+            return str(e), 1
+
+    def _get_conversation_model(self, cid: str) -> Optional[str]:
+        """Get the model used in a conversation."""
+        output, code = self._run_llm_command(['logs', '--cid', cid, '--json'])
+        if code == 0 and output:
+            try:
+                logs = json.loads(output)
+                if logs and len(logs) > 0:
+                    return logs[0].get('model')
+            except json.JSONDecodeError:
+                pass
+        return None
+
+    def _get_default_model(self) -> str:
+        """Get the default model."""
+        output, code = self._run_llm_command(['models', 'default'])
+        if code == 0 and output.strip():
+            return output.strip()
+        return "(unknown default model)"
+
+    def _get_latest_conversation_id(self) -> Optional[str]:
+        """Get the most recent conversation ID."""
+        output, code = self._run_llm_command(['logs', '-n', '1', '--json'])
+        if code == 0 and output:
+            try:
+                logs = json.loads(output)
+                if logs and len(logs) > 0:
+                    return logs[0].get('conversation_id')
+            except json.JSONDecodeError:
+                pass
+        return None
 
     def _has_stdin_data(self) -> bool:
         """Check if there's data available on stdin without blocking."""
@@ -98,7 +109,6 @@ class LLMPrompt:
                         print("\nInterrupted", file=sys.stderr)
                         break
         except (IOError, OSError):
-            # Fallback for Windows or when /dev/tty is not available
             print("Warning: Cannot open /dev/tty, falling back to standard input", file=sys.stderr)
             while True:
                 try:
@@ -138,87 +148,80 @@ class LLMPrompt:
         return prompt
 
     def _determine_model_and_conversation(self, model: Optional[str], continue_conv: bool,
-                                          cid: Optional[str]) -> Tuple[str, Optional[llm.Conversation], str]:
-        """Determine the model name, conversation, and display information."""
+                                          cid: Optional[str]) -> Tuple[str, Optional[str], str]:
+        """Determine the model name, conversation ID, and display information."""
         display_model = ""
         display_cid_info = ""
-        conversation = None
+        conversation_id = cid  # Start with explicit CID if provided
 
         if continue_conv or cid:
             if model:
                 display_model = model
                 if cid:
                     display_cid_info = f" (forcing model on CID: {cid})"
-                    conversation = self.db.get_conversation(cid)
                 else:
                     display_cid_info = " (forcing model on previous conversation)"
-                    # Get the last conversation
-                    conversations = list(self.db.get_all_conversations())
-                    if conversations:
-                        conversation = conversations[0]
+                    # We'll let llm handle finding the last conversation
 
             elif cid:
                 display_cid_info = f" (CID: {cid})"
-                conversation = self.db.get_conversation(cid)
-
-                if conversation and conversation.responses:
-                    display_model = conversation.responses[0].model.model_id
+                # Get model from the conversation
+                conv_model = self._get_conversation_model(cid)
+                if conv_model:
+                    display_model = conv_model
                 else:
+                    print(f"Warning: Could not determine original model from conversation '{cid}'",
+                          file=sys.stderr)
                     display_model = "(unknown original model)"
 
             else:
+                # Just -c flag
                 display_model = "(continuing previous conversation)"
                 display_cid_info = " (using last conversation)"
-                conversations = list(self.db.get_all_conversations())
-                if conversations:
-                    conversation = conversations[0]
-                    if conversation.responses:
-                        display_model = conversation.responses[0].model.model_id
 
         else:
             if model:
                 display_model = model
             else:
-                try:
-                    default_model = llm.get_default_model()
-                    display_model = default_model.model_id
-                except Exception:
-                    display_model = "(unknown default model)"
+                display_model = self._get_default_model()
 
-        return display_model, conversation, display_cid_info
+        return display_model, conversation_id, display_cid_info
 
     def _execute_llm(self, prompt: str, model_name: Optional[str],
-                     conversation: Optional[llm.Conversation]) -> Tuple[str, str]:
+                     continue_conv: bool, conversation_id: Optional[str]) -> Tuple[str, Optional[str]]:
         """Execute the LLM with the given prompt."""
         try:
-            if conversation:
-                # Continue existing conversation
-                if model_name and not model_name.startswith("("):
-                    model = llm.get_model(model_name)
-                else:
-                    # Use the model from the conversation
-                    model = None
+            # Build the command - use 'llm' not 'llm prompt'
+            cmd = ["llm"]
 
-                response = conversation.prompt(prompt, model=model)
+            if model_name and not model_name.startswith("("):
+                cmd.extend(["-m", model_name])
 
-            else:
-                # New conversation
-                if model_name and not model_name.startswith("("):
-                    model = llm.get_model(model_name)
-                else:
-                    model = llm.get_default_model()
+            if conversation_id:
+                cmd.extend(["--cid", conversation_id])
+            elif continue_conv:
+                cmd.append("-c")
 
-                response = model.prompt(prompt, log=True)
+            # Add the prompt as the last argument
+            cmd.append(prompt)
 
-            # Get the conversation ID
-            if hasattr(response, 'conversation') and response.conversation:
-                actual_cid = response.conversation.id
-            else:
-                # Get the latest conversation
-                conversations = list(self.db.get_all_conversations())
-                actual_cid = conversations[0].id if conversations else None
+            # Execute
+            result = subprocess.run(
+                cmd,
+                text=True,
+                capture_output=True
+            )
 
-            return response.text(), actual_cid
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout or "Unknown error"
+                raise RuntimeError(f"llm command failed: {error_msg}")
+
+            response = result.stdout.strip()
+
+            # Get the actual conversation ID from the last log entry
+            actual_cid = self._get_latest_conversation_id()
+
+            return response, actual_cid
 
         except Exception as e:
             raise RuntimeError(f"LLM execution failed: {e}")
@@ -296,7 +299,7 @@ class LLMPrompt:
             clipboard: bool, github_issue: Optional[str]) -> int:
         """Main execution logic."""
 
-        display_model, conversation, display_cid_info = self._determine_model_and_conversation(
+        display_model, conversation_id, display_cid_info = self._determine_model_and_conversation(
             model, continue_conv, cid
         )
 
@@ -309,7 +312,7 @@ class LLMPrompt:
 
         print("---")
         try:
-            response, actual_cid = self._execute_llm(prompt, model, conversation)
+            response, actual_cid = self._execute_llm(prompt, model, continue_conv, conversation_id)
             print(response)
             print("---")
 
@@ -317,6 +320,20 @@ class LLMPrompt:
             print("---")
             print(f"Error: {e}", file=sys.stderr)
             return 1
+
+        # Update display_model if it was ambiguous and we can get it from logs
+        if display_model in ["(continuing previous conversation)", "(unknown default model)"] and actual_cid:
+            # Try to get the actual model from the latest log
+            output, code = self._run_llm_command(['logs', '-n', '1', '--json'])
+            if code == 0 and output:
+                try:
+                    logs = json.loads(output)
+                    if logs and len(logs) > 0:
+                        actual_model = logs[0].get('model')
+                        if actual_model:
+                            display_model = actual_model
+                except json.JSONDecodeError:
+                    pass
 
         if clipboard:
             self._copy_to_clipboard(prompt, response, display_model, actual_cid)

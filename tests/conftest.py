@@ -1,39 +1,29 @@
-# tests/conftest.py
 import pytest
-from unittest.mock import Mock, MagicMock
-import sys
+from unittest.mock import Mock, patch, MagicMock
+import json
+
 
 @pytest.fixture
-def mock_llm():
-    """Mock the llm module for testing."""
-    mock = MagicMock()
+def mock_subprocess():
+    """Mock subprocess.run for llm commands."""
+    with patch('subprocess.run') as mock_run:
+        # Default successful response
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "Test response"
+        mock_run.return_value.stderr = ""
+        yield mock_run
 
-    # Mock the database
-    mock_db = Mock()
-    mock_conversation = Mock()
-    mock_conversation.id = "test-conv-123"
-    mock_conversation.responses = []
 
-    mock_db.get_conversation.return_value = mock_conversation
-    mock_db.get_all_conversations.return_value = [mock_conversation]
+@pytest.fixture
+def mock_stdin():
+    """Mock stdin for testing piped input."""
+    with patch('sys.stdin') as mock:
+        mock.isatty.return_value = True  # Default to terminal mode
+        yield mock
 
-    mock.get_default_db.return_value = mock_db
 
-    # Mock models
-    mock_model = Mock()
-    mock_model.model_id = "gpt-4"
-    mock_response = Mock()
-    mock_response.text.return_value = "Test response"
-    mock_response.conversation = mock_conversation
-    mock_model.prompt.return_value = mock_response
-
-    mock.get_model.return_value = mock_model
-    mock.get_default_model.return_value = mock_model
-
-    # Temporarily replace the module
-    sys.modules['llm'] = mock
-    yield mock
-
-    # Cleanup
-    if 'llm' in sys.modules:
-        del sys.modules['llm']
+@pytest.fixture
+def mock_open_tty():
+    """Mock opening /dev/tty for terminal input."""
+    with patch('builtins.open') as mock_open:
+        yield mock_open

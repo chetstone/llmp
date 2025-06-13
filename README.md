@@ -40,3 +40,18 @@ llmp/
 ├── dev.py                   # Optional development runner
 └── README.md
 ```
+
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=llmp --cov-report=html
+
+# Run specific test file
+pytest tests/test_cli.py
+
+# Run specific test
+pytest tests/test_cli.py::TestLLMExecution::test_execute_llm_new_conversation
+
+# Run with verbose output
+pytest -v
