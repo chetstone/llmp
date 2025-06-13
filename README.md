@@ -9,6 +9,8 @@ source .venv/bin/activate
 
 # 2. Install llmp in editable mode with its dependencies
 uv pip install -e .
+# Install with all features for development
+uv pip install -e ".[dev]"
 
 # This installs:
 # - pyperclip (in venv)
@@ -22,3 +24,19 @@ uv pip install pytest pytest-cov pytest-mock
 
 # 4. Verify it works
 llmp --help  # Should work, using global llm
+
+## Project Structure with testing
+```
+llmp/
+├── pyproject.toml
+├── src/
+│   └── llmp/
+│       ├── __init__.py      # ← Note double underscores!
+│       ├── __main__.py      # Optional, for python -m llmp
+│       └── cli.py
+├── tests/
+│   ├── __init__.py
+│   └── test_cli.py
+├── dev.py                   # Optional development runner
+└── README.md
+```

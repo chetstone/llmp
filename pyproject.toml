@@ -6,12 +6,21 @@ build-backend = "hatchling.build"
 name = "llmp"
 version = "0.1.0"
 description = "LLM prompt tool with clipboard and GitHub integration"
-readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    "pyperclip",
+    "click>=8.0",
+]
+
+[project.optional-dependencies]
+clipboard = ["pyperclip"]
+github = ["PyGithub"]
+all = ["pyperclip", "PyGithub"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-mock",
+    "pyperclip",  # Include all features for development
     "PyGithub",
-    "click>=8.0",  # for better CLI handling
 ]
 
 [project.scripts]
