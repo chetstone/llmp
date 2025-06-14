@@ -9,18 +9,15 @@ description = "LLM prompt tool with clipboard and GitHub integration"
 requires-python = ">=3.8"
 dependencies = [
     "click>=8.0",
+    "pyperclip",
+    "PyGithub",
 ]
 
 [project.optional-dependencies]
-clipboard = ["pyperclip"]
-github = ["PyGithub"]
-all = ["pyperclip", "PyGithub"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
     "pytest-mock",
-    "pyperclip",  # Include all features for development
-    "PyGithub",
 ]
 
 [project.scripts]
